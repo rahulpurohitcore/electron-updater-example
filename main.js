@@ -4,7 +4,9 @@
 const {app, BrowserWindow, Menu} = require('electron');
 const log = require('electron-log');
 const {autoUpdater} = require("electron-updater");
-
+const { NsisUpdater, MacUpdater, AppImageUpdater } = require("electron-updater")
+const os = require('os');
+const semver = require('semver');
 //-------------------------------------------------------------------
 // Logging
 //
@@ -72,29 +74,114 @@ function createDefaultWindow() {
   win.loadURL(`file://${__dirname}/version.html#v${app.getVersion()}`);
   return win;
 }
-autoUpdater.on('checking-for-update', () => {
-  sendStatusToWindow('Checking for update...');
-})
-autoUpdater.on('update-available', (info) => {
-  sendStatusToWindow('Update available.');
-})
-autoUpdater.on('update-not-available', (info) => {
-  sendStatusToWindow('Update not available.');
-})
-autoUpdater.on('error', (err) => {
-  sendStatusToWindow('Error in auto-updater. ' + err);
-})
-autoUpdater.on('download-progress', (progressObj) => {
-  let log_message = "Download speed: " + progressObj.bytesPerSecond;
-  log_message = log_message + ' - Downloaded ' + progressObj.percent + '%';
-  log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')';
-  sendStatusToWindow(log_message);
-})
-autoUpdater.on('update-downloaded', (info) => {
-  sendStatusToWindow('Update downloaded');
-});
+
+
+
+
+
+class AppUpdater {
+  constructor(win) {
+    this.win = win;
+    this.options = {
+      requestHeaders: {
+        "raka": true
+      },
+      provider: 'generic',
+      url: 'http://api.localhost.io:5000/v1/agents/update'
+    };
+
+    this.autoUpdater = this.createAutoUpdater();
+    if (!this.autoUpdater) return;
+
+    this.autoUpdater.addAuthHeader(`Bearer comeone`);
+    this.setupEventListeners();
+    this.checkForUpdates();
+  }
+
+  createAutoUpdater() {
+    switch(os.platform()) {
+      case 'win32':
+        return new NsisUpdater(this.options);
+      case 'darwin':
+        return new MacUpdater(this.options);
+      case 'linux':
+        return new AppImageUpdater(this.options);
+      default:
+        console.error('Unsupported platform for auto-updater');
+        return null;
+    }
+  }
+
+  setupEventListeners() {
+    this.autoUpdater.on('checking-for-update', () => {
+      this.sendStatusToWindow('Checking for update...');
+    });
+
+    this.autoUpdater.on('update-available', (info) => {
+      this.sendStatusToWindow('Update available.');
+      this.handleUpdateAvailable(info);
+    });
+
+    this.autoUpdater.on('update-not-available', (info) => {
+      this.sendStatusToWindow('Update not available.');
+    });
+
+    this.autoUpdater.on('error', (err) => {
+      this.sendStatusToWindow('Error in auto-updater. ' + err);
+    });
+
+    this.autoUpdater.on('download-progress', (progressObj) => {
+      let log_message = "Download speed: " + progressObj.bytesPerSecond;
+      log_message = log_message + ' - Downloaded ' + progressObj.percent + '%';
+      log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')';
+      this.sendStatusToWindow(log_message);
+    });
+
+    this.autoUpdater.on('update-downloaded', (info) => {
+      this.sendStatusToWindow('Update downloaded');
+      this.autoUpdater.quitAndInstall();
+    });
+  }
+
+  async checkForUpdates() {
+    try {
+      const result = await this.autoUpdater.checkForUpdates();
+      const serverVersion = result.updateInfo.version;
+      const currentVersion = this.autoUpdater.currentVersion.version;
+
+      if (semver.compare(serverVersion, currentVersion) !== 0) {
+        // Version is different, proceed with update
+        await this.autoUpdater.downloadUpdate();
+      }
+    } catch (error) {
+      console.error('Error checking for updates:', error);
+    }
+  }
+
+  handleUpdateAvailable(info) {
+    const serverVersion = info.version;
+    const currentVersion = this.autoUpdater.currentVersion.version;
+
+    if (semver.lt(serverVersion, currentVersion)) {
+      this.sendStatusToWindow('Downgrade available. Proceeding with downgrade...');
+    } else {
+      this.sendStatusToWindow('Upgrade available. Proceeding with upgrade...');
+    }
+  }
+
+  sendStatusToWindow(text) {
+    console.log(text);
+    if (this.win) {
+      this.win.webContents.send('message', text);
+    }
+  }
+}
+
+module.exports = AppUpdater;
+
+
+
 app.on('ready', function() {
-  // Create the Menu
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
@@ -114,8 +201,11 @@ app.on('window-all-closed', () => {
 // This will immediately download an update, then install when the
 // app quits.
 //-------------------------------------------------------------------
+
 app.on('ready', function()  {
-  autoUpdater.checkForUpdatesAndNotify();
+  console.log('ready')
+  new AppUpdater();
+  //autoUpdater.checkForUpdatesAndNotify();
 });
 
 //-------------------------------------------------------------------
